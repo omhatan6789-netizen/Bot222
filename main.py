@@ -15,6 +15,7 @@ from telegram.ext import (
 )
 
 import database
+from ranks import register_rank_handlers
 
 
 logging.basicConfig(
@@ -24,6 +25,33 @@ logging.basicConfig(
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger("nawafbot")
+
+
+async def post_init(app: Application) -> None:
+    """تهيئة المطور الأعلى عند بدء تشغيل البوت."""
+    raw_id = os.getenv("NAWAF_USER_ID", "").strip()
+
+    if not raw_id:
+        logger.warning(
+            "NAWAF_USER_ID is missing; global developer is not configured."
+        )
+        return
+
+    try:
+        nawaf_id = int(raw_id)
+
+        await asyncio.to_thread(
+            database.ensure_nawaf_developer,
+            nawaf_id,
+        )
+
+        logger.info("Global developer initialized.")
+
+    except ValueError:
+        logger.error("NAWAF_USER_ID must be a numeric Telegram user ID.")
+
+    except Exception:
+        logger.exception("Failed to initialize global developer.")
 
 
 async def start(
@@ -204,6 +232,7 @@ def main() -> None:
     app: Application = (
         ApplicationBuilder()
         .token(token)
+        .post_init(post_init)
         .build()
     )
 
@@ -221,8 +250,11 @@ def main() -> None:
         MessageHandler(
             filters.ALL & ~filters.COMMAND,
             count_group_message,
-        )
+        ),
+        group=0,
     )
+
+    register_rank_handlers(app)
 
     app.add_error_handler(on_error)
 
