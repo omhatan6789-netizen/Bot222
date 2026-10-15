@@ -1,6 +1,3 @@
-
-"""الاتصال المركزي بقاعدة بيانات Supabase عبر PostgreSQL."""
-
 import os
 from contextlib import contextmanager
 
@@ -163,3 +160,36 @@ def increment_message_count(
                 """,
                 (chat_id, user_id),
             )
+
+
+
+def ensure_nawaf_developer(user_id: int) -> None:
+    """تثبيت المطور الأعلى باستخدام آيدي تيليجرام الموثوق."""
+    if user_id <= 0:
+        raise ValueError("NAWAF_USER_ID must be a positive Telegram user ID")
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            # جدول المطورين مرتبط بجدول المستخدمين، لذلك نضمن وجوده أولًا.
+            cur.execute(
+                """
+                INSERT INTO users (user_id, first_name, updated_at)
+                VALUES (%s, 'Nawaf', NOW())
+                ON CONFLICT (user_id) DO NOTHING
+                """,
+                (user_id,),
+            )
+
+            # المستوى 3 هو أعلى مستوى للمطورين.
+            cur.execute(
+                """
+                INSERT INTO global_developers (
+                    user_id, developer_level
+                )
+                VALUES (%s, 3)
+                ON CONFLICT (user_id) DO UPDATE SET
+                    developer_level = 3
+                """,
+                (user_id,),
+            )
+
