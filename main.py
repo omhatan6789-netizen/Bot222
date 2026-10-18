@@ -34,13 +34,26 @@ class HealthHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         log.info("HTTP: " + format, *args)
 
+    
+    def do_HEAD(self):
+        if self.path in ("/", "/health"):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(b"Bot222 is running")))
+            self.end_headers()
+        else:
+            self.send_error(404)
+
 
 def run_bot(app):
     asyncio.set_event_loop(asyncio.new_event_loop())
     log.info("Starting Telegram polling")
+
     app.run_polling(
-        allowed_updates=["message", "my_chat_member"]
+        allowed_updates=["message", "my_chat_member"],
+        stop_signals=None,
     )
+
 
 
 def main():
