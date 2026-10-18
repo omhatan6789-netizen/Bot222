@@ -1,3 +1,4 @@
+
 import os
 import logging
 from contextlib import contextmanager
@@ -7,17 +8,17 @@ from psycopg2.extras import RealDictCursor
 
 log = logging.getLogger("Bot222.database")
 
+GLOBAL_RANKS = {"dev", "dev2"}
+GROUP_RANKS = {"owner", "creator", "manager", "admin", "premium"}
+
 
 def get_connection():
-    database_url = os.getenv("DATABASE_URL", "").strip()
-
-    if not database_url:
-        raise RuntimeError(
-            "متغير DATABASE_URL غير موجود في إعدادات الاستضافة."
-        )
+    url = os.getenv("DATABASE_URL", "").strip()
+    if not url:
+        raise RuntimeError("متغير DATABASE_URL غير موجود.")
 
     return psycopg2.connect(
-        database_url,
+        url,
         sslmode="require",
         connect_timeout=10,
         cursor_factory=RealDictCursor,
@@ -36,7 +37,6 @@ def db_cursor():
 
 
 def init_db():
-    """تأكد من اتصال قاعدة البيانات."""
     with db_cursor() as cur:
         cur.execute("SELECT 1")
     log.info("Supabase database connection successful")
@@ -45,41 +45,33 @@ def init_db():
 def get_global_ranks(user_id):
     with db_cursor() as cur:
         cur.execute(
-            """
-            SELECT rank_key
-            FROM public.global_ranks
-            WHERE user_id = %s
-            ORDER BY created_at
-            """,
+            "SELECT rank_key FROM public.global_ranks WHERE user_id = %s",
             (user_id,),
         )
-        return [row["rank_key"] for row in cur.fetchall()]
+        return [r["rank_key"] for r in cur.fetchall()]
 
 
 def get_group_ranks(chat_id, user_id):
     with db_cursor() as cur:
         cur.execute(
             """
-            SELECT rank_key
-            FROM public.group_ranks
+            SELECT rank_key FROM public.group_ranks
             WHERE chat_id = %s AND user_id = %s
-            ORDER BY created_at
             """,
             (chat_id, user_id),
         )
-        return [row["rank_key"] for row in cur.fetchall()]
+        return [r["rank_key"] for r in cur.fetchall()]
 
 
 def get_all_ranks(chat_id, user_id):
-    return {
-        "global": get_global_ranks(user_id),
-        "group": get_group_ranks(chat_id, user_id),
-    }
+    return set(get_global_ranks(user_id)) | set(
+        get_group_ranks(chat_id, user_id)
+    )
 
 
 def grant_rank(chat_id, user_id, rank_key, granted_by=None, global_rank=False):
-    if global_rank:
-        if rank_key not in ("dev", "dev2"):
+    if global_rank or rank_key in GLOBAL_RANKS:
+        if rank_key not in GLOBAL_RANKS:
             raise ValueError("رتبة عالمية غير صالحة.")
 
         with db_cursor() as cur:
@@ -92,26 +84,25 @@ def grant_rank(chat_id, user_id, rank_key, granted_by=None, global_rank=False):
                 """,
                 (user_id, rank_key, granted_by),
             )
-    else:
-        if rank_key not in (
-            "owner", "creator", "manager", "admin", "premium"
-        ):
-            raise ValueError("رتبة مجموعة غير صالحة.")
+        return
 
-        with db_cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO public.group_ranks
-                    (chat_id, user_id, rank_key, granted_by)
-                VALUES (%s, %s, %s, %s)
-                ON CONFLICT (chat_id, user_id, rank_key) DO NOTHING
-                """,
-                (chat_id, user_id, rank_key, granted_by),
-            )
+    if rank_key not in GROUP_RANKS:
+        raise ValueError("رتبة مجموعة غير صالحة.")
+
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO public.group_ranks
+                (chat_id, user_id, rank_key, granted_by)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (chat_id, user_id, rank_key) DO NOTHING
+            """,
+            (chat_id, user_id, rank_key, granted_by),
+        )
 
 
 def revoke_rank(chat_id, user_id, rank_key, global_rank=False):
-    if global_rank:
+    if global_rank or rank_key in GLOBAL_RANKS:
         with db_cursor() as cur:
             cur.execute(
                 """
@@ -120,34 +111,41 @@ def revoke_rank(chat_id, user_id, rank_key, global_rank=False):
                 """,
                 (user_id, rank_key),
             )
-    else:
-        with db_cursor() as cur:
+        return
+
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            DELETE FROM public.group_ranks
+            WHERE chat_id = %s AND user_id = %s AND rank_key = %s
+            """,
+            (chat_id, user_id, rank_key),
+        )
+
+
+def revoke_all_ranks(chat_id, user_id, rank_keys=None):
+    keys = set(rank_keys) if rank_keys is not None else GROUP_RANKS
+    global_keys = keys & GLOBAL_RANKS
+    group_keys = keys & GROUP_RANKS
+
+    with db_cursor() as cur:
+        if global_keys:
             cur.execute(
                 """
-                DELETE FROM public.group_ranks
-                WHERE chat_id = %s
-                  AND user_id = %s
-                  AND rank_key = %s
+                DELETE FROM public.global_ranks
+                WHERE user_id = %s AND rank_key = ANY(%s)
                 """,
-                (chat_id, user_id, rank_key),
+                (user_id, list(global_keys)),
             )
 
-
-def revoke_all_ranks(chat_id, user_id, global_rank=False):
-    if global_rank:
-        with db_cursor() as cur:
-            cur.execute(
-                "DELETE FROM public.global_ranks WHERE user_id = %s",
-                (user_id,),
-            )
-    else:
-        with db_cursor() as cur:
+        if group_keys:
             cur.execute(
                 """
                 DELETE FROM public.group_ranks
                 WHERE chat_id = %s AND user_id = %s
+                  AND rank_key = ANY(%s)
                 """,
-                (chat_id, user_id),
+                (chat_id, user_id, list(group_keys)),
             )
 
 
@@ -185,16 +183,14 @@ def list_group_rank_holders(chat_id, rank_key):
     with db_cursor() as cur:
         cur.execute(
             """
-            SELECT user_id, first_name, username
-            FROM public.group_members
-            WHERE chat_id = %s
-              AND user_id IN (
-                  SELECT user_id
-                  FROM public.group_ranks
-                  WHERE chat_id = %s AND rank_key = %s
-              )
-            ORDER BY first_name
+            SELECT gm.user_id, gm.first_name, gm.username
+            FROM public.group_members AS gm
+            JOIN public.group_ranks AS gr
+              ON gr.chat_id = gm.chat_id
+             AND gr.user_id = gm.user_id
+            WHERE gm.chat_id = %s AND gr.rank_key = %s
+            ORDER BY gm.first_name
             """,
-            (chat_id, chat_id, rank_key),
+            (chat_id, rank_key),
         )
         return cur.fetchall()
