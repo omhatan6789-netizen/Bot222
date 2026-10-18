@@ -194,3 +194,27 @@ def list_group_rank_holders(chat_id, rank_key):
             (chat_id, rank_key),
         )
         return cur.fetchall()
+
+
+
+
+def list_global_rank_holders(rank_key):
+    if rank_key not in GLOBAL_RANKS:
+        return []
+
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                g.user_id,
+                COALESCE(u.first_name, '') AS first_name,
+                u.username
+            FROM public.global_ranks AS g
+            LEFT JOIN public.bot_users AS u
+                ON u.user_id = g.user_id
+            WHERE g.rank_key = %s
+            ORDER BY g.created_at
+            """,
+            (rank_key,),
+        )
+        return cur.fetchall()
