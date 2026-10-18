@@ -3,13 +3,13 @@ import os
 import logging
 
 import psycopg2
+from psycopg2.extras import RealDictCursor
 
 log = logging.getLogger("Bot222.supabase_users")
 
 
 def get_connection():
     database_url = os.getenv("DATABASE_URL", "").strip()
-
     if not database_url:
         raise RuntimeError("متغير DATABASE_URL غير موجود.")
 
@@ -17,10 +17,20 @@ def get_connection():
         database_url,
         sslmode="require",
         connect_timeout=10,
+        cursor_factory=RealDictCursor,
     )
 
 
-def upsert_user(user_id, first_name="", username=None):
+def upsert_user(user, first_name=None, username=None):
+    """يدعم كائن مستخدم تيليجرام أو تمرير بيانات المستخدم منفصلة."""
+    if hasattr(user, "id"):
+        user_id = user.id
+        first_name = user.first_name or ""
+        username = user.username
+    else:
+        user_id = int(user)
+        first_name = first_name or ""
+
     conn = get_connection()
     try:
         with conn:
@@ -36,32 +46,21 @@ def upsert_user(user_id, first_name="", username=None):
                         username = EXCLUDED.username,
                         updated_at = NOW()
                     """,
-                    (user_id, first_name or "", username),
+                    (user_id, first_name, username),
                 )
     finally:
         conn.close()
 
 
-def increment_message_count(user_id):
-    conn = get_connection()
-    try:
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    UPDATE public.bot_users
-                    SET message_count = message_count + 1,
-                        updated_at = NOW()
-                    WHERE user_id = %s
-                    """,
-                    (user_id,),
-                )
-    finally:
-        conn.close()
+def increment_message_count(user, first_name=None, username=None):
+    if hasattr(user, "id"):
+        user_id = user.id
+        first_name = user.first_name or ""
+        username = user.username
+    else:
+        user_id = int(user)
+        first_name = first_name or ""
 
-
-def record_message(user_id, first_name="", username=None):
-    """تسجيل المستخدم وزيادة عداد رسائله في عملية قاعدة بيانات واحدة."""
     conn = get_connection()
     try:
         with conn:
@@ -79,7 +78,51 @@ def record_message(user_id, first_name="", username=None):
                             public.bot_users.message_count + 1,
                         updated_at = NOW()
                     """,
-                    (user_id, first_name or "", username),
+                    (user_id, first_name, username),
                 )
+    finally:
+        conn.close()
+
+
+def record_message(user, first_name=None, username=None):
+    """تسجيل المستخدم وزيادة عدد رسائله في استعلام واحد."""
+    increment_message_count(user, first_name, username)
+
+
+def get_user(user_id):
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT user_id, first_name, username, message_count
+                FROM public.bot_users
+                WHERE user_id = %s
+                """,
+                (int(user_id),),
+            )
+            return cur.fetchone()
+    finally:
+        conn.close()
+
+
+def find_user_by_username(username):
+    username = (username or "").strip().lstrip("@")
+    if not username:
+        return None
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT user_id, first_name, username, message_count
+                FROM public.bot_users
+                WHERE LOWER(username) = LOWER(%s)
+                LIMIT 1
+                """,
+                (username,),
+            )
+            return cur.fetchone()
     finally:
         conn.close()
