@@ -1,4 +1,5 @@
 
+import asyncio
 import logging
 import os
 
@@ -27,14 +28,21 @@ def main():
     database.init_db()
 
     app = Application.builder().token(token).build()
-
     ranks.register_handlers(app)
+
+    # إنشاء حلقة أحداث صراحةً لتوافق Python 3.14
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
 
     log.info("Starting Bot222")
 
-    app.run_polling(
-        allowed_updates=["message", "my_chat_member"]
-    )
+    try:
+        app.run_polling(
+            allowed_updates=["message", "my_chat_member"]
+        )
+    finally:
+        if not loop.is_closed():
+            loop.close()
 
 
 if __name__ == "__main__":
