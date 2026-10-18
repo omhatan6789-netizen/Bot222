@@ -257,6 +257,7 @@ def can_manage(actor_id, chat_id, target_id, key):
     return True, ""
 
 
+
 async def register_message(update):
     message = update.effective_message
     user = update.effective_user
@@ -266,20 +267,23 @@ async def register_message(update):
         return
 
     try:
-        supabase_users.upsert_user(user)
-
         if message.text or message.caption:
-            supabase_users.increment_message_count(user)
+            supabase_users.record_message(user)
+        else:
+            supabase_users.upsert_user(user)
     except Exception:
         log.exception("Supabase user sync failed")
 
     if chat.type in (ChatType.GROUP, ChatType.SUPERGROUP):
-        database.save_group_member(
-            chat.id,
-            user.id,
-            user.first_name,
-            user.username,
-        )
+        try:
+            database.save_group_member(
+                chat.id,
+                user.id,
+                user.first_name,
+                user.username,
+            )
+        except Exception:
+            log.exception("Group member sync failed")
 
 
 async def command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -477,6 +481,7 @@ async def command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+
 async def group_inspect(message, chat_id):
     sections = [
         ("owner", "المالكين"),
@@ -490,17 +495,14 @@ async def group_inspect(message, chat_id):
 
     for key, title in sections:
         lines.extend([f"• قائمة {title}", "━━━━━━━━━━━━"])
-        user_ids = database.list_group_rank_holders(chat_id, key)
+        members = database.list_group_rank_holders(chat_id, key)
 
-        if not user_ids:
+        if not members:
             lines.append("لا يوجد")
         else:
-            for index, user_id in enumerate(user_ids, 1):
-                first_name, username, _ = await profile(
-                    user_id, chat_id
-                )
+            for index, item in enumerate(members, 1):
                 lines.append(
-                    f"{index} - {mention(user_id, first_name, username)}"
+                    f"{index} - {mention(item['user_id'], item['first_name'], item['username'])}"
                 )
 
         lines.append("")
@@ -511,23 +513,29 @@ async def group_inspect(message, chat_id):
     )
 
 
+
+
 async def rank_list(message, chat_id, key, title):
-    user_ids = database.list_group_rank_holders(chat_id, key)
+    if key in {"dev", "dev2"}:
+        members = database.list_global_rank_holders(key)
+    else:
+        members = database.list_group_rank_holders(chat_id, key)
+
     lines = [f"• قائمة {title}", "━━━━━━━━━━━━"]
 
-    if not user_ids:
+    if not members:
         lines.append("لا يوجد")
     else:
-        for index, user_id in enumerate(user_ids, 1):
-            first_name, username, _ = await profile(user_id, chat_id)
+        for index, item in enumerate(members, 1):
             lines.append(
-                f"{index} - {mention(user_id, first_name, username)}"
+                f"{index} - {mention(item['user_id'], item['first_name'], item['username'])}"
             )
 
     await message.reply_text(
         "\n".join(lines),
         parse_mode=ParseMode.HTML,
     )
+
 
 
 async def on_my_chat_member(
