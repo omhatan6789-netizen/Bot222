@@ -2,6 +2,8 @@
 import asyncio
 import logging
 import os
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from telegram.ext import Application
 
@@ -17,32 +19,53 @@ logging.basicConfig(
 log = logging.getLogger("Bot222")
 
 
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path in ("/", "/health"):
+            body = b"Bot222 is running"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        else:
+            self.send_error(404)
+
+    def log_message(self, format, *args):
+        log.info("HTTP: " + format, *args)
+
+
+def run_bot(app):
+    asyncio.set_event_loop(asyncio.new_event_loop())
+    log.info("Starting Telegram polling")
+    app.run_polling(
+        allowed_updates=["message", "my_chat_member"]
+    )
+
+
 def main():
     token = os.getenv("BOT_TOKEN", "").strip()
-
     if not token:
-        raise RuntimeError(
-            "ضع توكن تيليجرام في متغير BOT_TOKEN في إعدادات الاستضافة."
-        )
+        raise RuntimeError("BOT_TOKEN is missing")
 
     database.init_db()
 
     app = Application.builder().token(token).build()
     ranks.register_handlers(app)
 
-    # إنشاء حلقة أحداث صراحةً لتوافق Python 3.14
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    bot_thread = threading.Thread(
+        target=run_bot,
+        args=(app,),
+        name="TelegramBot",
+        daemon=True,
+    )
+    bot_thread.start()
 
-    log.info("Starting Bot222")
+    port = int(os.getenv("PORT", "10000"))
+    server = ThreadingHTTPServer(("0.0.0.0", port), HealthHandler)
 
-    try:
-        app.run_polling(
-            allowed_updates=["message", "my_chat_member"]
-        )
-    finally:
-        if not loop.is_closed():
-            loop.close()
+    log.info("HTTP health server listening on port %s", port)
+    server.serve_forever()
 
 
 if __name__ == "__main__":
